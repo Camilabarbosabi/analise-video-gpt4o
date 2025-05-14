@@ -1,118 +1,73 @@
 import streamlit as st
-from moviepy.editor import VideoFileClip
-from PIL import Image
-from io import BytesIO
+import tempfile
 import base64
-import openai
 import os
+from PIL import Image
+import imageio.v3 as iio
+import ffmpeg
+from openai import OpenAI
 
-# Configurar chave da API
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-st.set_page_config(page_title="Análise Completa de Vídeos", layout="centered")
-st.title("🎬 Análise Qualitativa Completa com GPT-4o")
-st.markdown("Upload do vídeo > Análise visual + Transcrição > Insight completo")
+st.title("Análise Qualitativa de Vídeos com GPT-4o 🤖")
 
-# --- Funções auxiliares ---
+video_file = st.file_uploader("Faça upload de um vídeo (.mp4)", type=["mp4"])
 
-def extrair_frames(video_path, num_frames=5):
-    clip = VideoFileClip(video_path)
-    duration = int(clip.duration)
-    frames = []
-    step = max(1, duration // num_frames)
-    for t in range(0, duration, step):
-        if len(frames) >= num_frames:
-            break
-        frame = clip.get_frame(t)
+if video_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        tmp.write(video_file.read())
+        video_path = tmp.name
+
+    st.success("Vídeo carregado! Extraindo frames e áudio...")
+
+    # Extrair frames
+    frames = list(iio.imiter(video_path))
+    selected_frames = frames[::20][:5]
+
+    # Exibir os frames
+    for i, frame in enumerate(selected_frames):
         img = Image.fromarray(frame)
-        frames.append(img)
-    return frames
+        st.image(img, caption=f"Frame {i+1}", width=300)
 
-def image_to_base64(image):
-    buffered = BytesIO()
-    image.save(buffered, format="JPEG")
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+    # 🔊 Extrair áudio do vídeo
+    audio_path = video_path.replace(".mp4", ".wav")
+    ffmpeg.input(video_path).output(audio_path, format='wav').run(overwrite_output=True)
 
-def analisar_frame_com_gpt(img64):
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "Você é um especialista em marketing de conteúdo. Analise visualmente o que esse frame transmite."},
-            {"role": "user", "content": [
-                {"type": "text", "text": "Analise o que esse frame comunica visualmente em termos de expressão, edição, estilo e impacto:"},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img64}"}}
-            ]}
-        ]
-    )
-    return response.choices[0].message.content
-
-def extrair_audio(video_path, audio_path="audio_temp.mp3"):
-    clip = VideoFileClip(video_path)
-    clip.audio.write_audiofile(audio_path)
-    return audio_path
-
-def transcrever_audio(audio_path):
     with open(audio_path, "rb") as audio_file:
-        transcript = openai.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            response_format="text"
-        )
-    return transcript
+        audio_bytes = audio_file.read()
 
-def gerar_insight_combinado(transcricao, analises_visuais):
+    st.audio(audio_bytes, format="audio/wav")
+
+    # ✅ Transcrever áudio
+    st.info("Transcrevendo o áudio com o Whisper...")
+    audio_file = open(audio_path, "rb")
+    transcript = client.audio.transcriptions.create(
+        file=audio_file,
+        model="whisper-1"
+    )
+    st.write("Transcrição:", transcript.text)
+
+    # ✅ Análise final com GPT
+    st.info("Gerando análise com GPT-4o...")
     prompt = f"""
-Abaixo está a transcrição de um vídeo e análises visuais de 5 frames:
+    Abaixo está a transcrição de um vídeo e as descrições visuais dos principais frames.
+    Transcrição:
+    {transcript.text}
 
-TRANSCRIÇÃO:
-{transcricao}
+    (As descrições visuais ainda não foram geradas aqui — podemos gerar depois com vision)
 
-ANÁLISE VISUAL DOS FRAMES:
-{analises_visuais}
+    Com base nesse conteúdo, me diga:
+    - Qual o tom do vídeo?
+    - Há algum destaque visual ou sonoro importante?
+    - Algum elemento pode ter contribuído para engajamento (edição, fala, imagem)?
 
-Com base na transcrição e nas imagens, gere uma análise geral do que esse vídeo transmite.
-Avalie o tom, estilo, clareza da mensagem e potencial de viralização. Seja analítico, claro e direto.
-"""
-    response = openai.chat.completions.create(
+    Seja breve e direta.
+    """
+
+    response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message.content
-
-# --- Interface Streamlit ---
-
-video_file = st.file_uploader("📁 Envie um vídeo (.mp4)", type=["mp4"])
-
-if video_file is not None:
-    video_path = f"temp_{video_file.name}"
-    with open(video_path, "wb") as f:
-        f.write(video_file.read())
-
-    st.success("✅ Vídeo carregado com sucesso.")
-    st.subheader("🎞️ Analisando imagens do vídeo...")
-
-    frames = extrair_frames(video_path, num_frames=5)
-    analises = []
-    for i, frame in enumerate(frames):
-        st.image(frame, caption=f"Frame {i+1}")
-        img64 = image_to_base64(frame)
-        analise = analisar_frame_com_gpt(img64)
-        analises.append(f"Frame {i+1}: {analise}")
-        st.markdown(f"**Frame {i+1}** – {analise}")
-
-    st.divider()
-    st.subheader("🔊 Transcrevendo o áudio do vídeo...")
-
-    audio_path = extrair_audio(video_path)
-    transcricao = transcrever_audio(audio_path)
-    st.text_area("📝 Transcrição do vídeo:", value=transcricao, height=200)
-
-    st.divider()
-    st.subheader("🧠 Insight final (combinando imagem + som)")
-    resultado = gerar_insight_combinado(transcricao, "\n".join(analises))
-    st.markdown(f"**Análise integrada:**\n\n{resultado}")
-
-    # Limpeza de arquivos
-    os.remove(video_path)
-    os.remove(audio_path)
+    st.success("Análise completa:")
+    st.markdown(response.choices[0].message.content)
 
