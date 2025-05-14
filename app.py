@@ -1,61 +1,55 @@
 import streamlit as st
 import base64
-import os
-import cv2
-from io import BytesIO
 from PIL import Image
-import imageio.v3 as imageio
-from openai import OpenAI
+from io import BytesIO
+from moviepy.editor import VideoFileClip
+import imageio
+import openai
 
-# --- Configurar API ---
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# --- Configuração da API ---
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# --- Função para converter imagem em base64 ---
-def image_to_base64(image):
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-# --- Função para enviar frame ao GPT ---
-def analisar_frame_com_gpt(imagem_base64):
-    prompt = f"Analise o conteúdo visual da imagem abaixo e explique os elementos que podem ter contribuído para um bom desempenho nas redes sociais."
-
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "Você é um especialista em marketing de conteúdo."},
-            {"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{imagem_base64}"}}
-            ]}
-        ],
-    )
-
-    return response.choices[0].message.content
-
-# --- Função para extrair frames usando OpenCV ---
-def extrair_frames(video_path, intervalo_frames=60):
-    video = cv2.VideoCapture(video_path)
+# --- Função para extrair frames ---
+def extrair_frames(video_path, intervalo_frames=30):
     frames = []
-    i = 0
-    while True:
-        ret, frame = video.read()
-        if not ret:
-            break
-        if i % intervalo_frames == 0:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            frames.append(img)
-        i += 1
-    video.release()
+    clip = VideoFileClip(video_path)
+    duracao = int(clip.fps * clip.duration)
+
+    for i in range(0, duracao, intervalo_frames):
+        frame = clip.get_frame(i / clip.fps)
+        img = Image.fromarray(frame)
+        frames.append(img)
+
     return frames
 
-# --- Interface Streamlit ---
-st.set_page_config(page_title="Análise Qualitativa de Vídeos com GPT-4o 🤖")
-st.title("Análise Qualitativa de Vídeos com GPT-4o 🤖")
-st.markdown("Faça upload de um vídeo (.mp4)")
+# --- Função para converter imagem para base64 ---
+def image_to_base64(image):
+    buffered = BytesIO()
+    image.save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-video_file = st.file_uploader("Drag and drop file here", type=["mp4"])
+# --- Função para analisar um frame com GPT-4o ---
+def analisar_frame_com_gpt(image_base64):
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "Você é um especialista em conteúdo de redes sociais. Seu papel é analisar visualmente o que contribui para o sucesso ou fracasso de vídeos. Seja técnico, direto e use termos visuais."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Analise esse frame de vídeo e explique o que pode ter contribuído para viralizar ou não."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                ]
+            }
+        ]
+    )
+    return response.choices[0].message.content
+
+# --- Interface do Streamlit ---
+st.set_page_config(page_title="Análise Qualitativa de Vídeos", layout="centered")
+st.title("Análise Qualitativa de Vídeos com GPT-4o 🤖")
+
+video_file = st.file_uploader("Faça upload de um vídeo (.mp4)", type=["mp4"])
 
 if video_file is not None:
     video_path = f"temp_{video_file.name}"
@@ -63,7 +57,7 @@ if video_file is not None:
         f.write(video_file.read())
     st.success("Vídeo carregado! Extraindo frames...")
 
-    frames = extrair_frames(video_path, intervalo_frames=30)
+    frames = extrair_frames(video_path, intervalo_frames=60)
     st.info(f"{len(frames)} frames extraídos. Analisando os 5 primeiros...")
 
     for i, frame in enumerate(frames[:5]):
@@ -71,5 +65,3 @@ if video_file is not None:
         img64 = image_to_base64(frame)
         resultado = analisar_frame_com_gpt(img64)
         st.markdown(f"**Análise do Frame {i+1}:**\n\n{resultado}")
-
-    os.remove(video_path)
