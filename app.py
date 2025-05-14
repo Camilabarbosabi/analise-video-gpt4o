@@ -4,19 +4,17 @@ import os
 import base64
 from PIL import Image
 from io import BytesIO
-from moviepy.editor import VideoFileClip
+import imageio
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# --- Extrai frames com MoviePy ---
-def extrair_frames(video_path, intervalo_seg=1):
-    clip = VideoFileClip(video_path)
-    duration = int(clip.duration)
+def extrair_frames(video_path, intervalo_frames=30):
     frames = []
-    for t in range(0, duration, intervalo_seg):
-        frame = clip.get_frame(t)
-        image = Image.fromarray(frame).resize((512, 512))
-        frames.append(image)
+    reader = imageio.get_reader(video_path, 'ffmpeg')
+    for i, frame in enumerate(reader):
+        if i % intervalo_frames == 0:
+            img = Image.fromarray(frame).resize((512, 512))
+            frames.append(img)
     return frames
 
 def image_to_base64(image):
@@ -50,7 +48,7 @@ if video_file is not None:
         f.write(video_file.read())
 
     st.success("Vídeo carregado! Extraindo frames...")
-    frames = extrair_frames(video_path, intervalo_seg=1)
+    frames = extrair_frames(video_path, intervalo_frames=30)
     st.info(f"{len(frames)} frames extraídos. Analisando os 3 primeiros...")
 
     for i, frame in enumerate(frames[:3]):
@@ -58,3 +56,4 @@ if video_file is not None:
         img64 = image_to_base64(frame)
         resultado = analisar_frame_com_gpt(img64)
         st.markdown(f"**Análise do Frame {i+1}:**\n\n{resultado}")
+
