@@ -1,4 +1,4 @@
 streamlit
 openai
-moviepy
+imageio
 pillow
